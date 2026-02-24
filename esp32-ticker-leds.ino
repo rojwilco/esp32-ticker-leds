@@ -2,6 +2,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <FastLED.h>
+#include <math.h>
 #include <ArduinoJson.h>
 #include "secrets.h"
 
@@ -19,13 +20,14 @@
 // ---------------------------------------------------------------------------
 // Brightness limits
 // ---------------------------------------------------------------------------
-#define DIM_BRIGHTNESS   20
-#define FULL_BRIGHTNESS 255
+#define DIM_BRIGHTNESS          20
+#define FULL_BRIGHTNESS        255
+#define USE_SIGMOID_BRIGHTNESS   1  // 0 = linear, 1 = sigmoid
 
 // ---------------------------------------------------------------------------
 // Price-change scale: ±MAX_PERCENT maps to full brightness
 // ---------------------------------------------------------------------------
-#define MAX_PERCENT 5.0f
+#define MAX_PERCENT 3.0f
 
 // ---------------------------------------------------------------------------
 // Ticker symbols (URL-encoded at compile time)
@@ -124,10 +126,10 @@ void pollAllTickers() {
         float dp = 0.0f;
         if (fetchQuote(SYMBOLS[i], &dp)) {
             leds[i] = computeColor(dp);
-            Serial.printf("  [%d] %s  dp=%.2f%%\n", i, SYMBOLS[i], dp);
+            Serial.printf("  [%d] %s  dp=%.2f%%  rgb=(%d,%d,%d)\n", i, SYMBOLS[i], dp, leds[i].r, leds[i].g, leds[i].b);
         } else {
             leds[i] = CRGB(10, 10, 10);  // dim white = fetch failure
-            Serial.printf("  [%d] %s  FETCH FAILED\n", i, SYMBOLS[i]);
+            Serial.printf("  [%d] %s  FETCH FAILED  rgb=(%d,%d,%d)\n", i, SYMBOLS[i], leds[i].r, leds[i].g, leds[i].b);
         }
     }
     FastLED.show();  // single show after all LEDs set — no flicker
@@ -183,6 +185,17 @@ bool fetchQuote(const char* symbol, float* outDp) {
 }
 
 // ---------------------------------------------------------------------------
+// sigmoidMap — maps [0,255] through a sigmoid curve back to [0,255]
+// ---------------------------------------------------------------------------
+static uint8_t sigmoidMap(uint8_t v) {
+    float x = (v / 255.0f) * 10.0f - 5.0f;
+    float s = 1.0f / (1.0f + expf(-x));
+    const float lo = 1.0f / (1.0f + expf(5.0f));
+    const float hi = 1.0f / (1.0f + expf(-5.0f));
+    return (uint8_t)((s - lo) / (hi - lo) * 255.0f);
+}
+
+// ---------------------------------------------------------------------------
 // computeColor — brightness proportional to |dp|, green=up red=down
 // ---------------------------------------------------------------------------
 CRGB computeColor(float dp) {
@@ -191,6 +204,9 @@ CRGB computeColor(float dp) {
 
     float t = absDP / MAX_PERCENT;  // 0.0 … 1.0
     uint8_t brightness = (uint8_t)(DIM_BRIGHTNESS + t * (FULL_BRIGHTNESS - DIM_BRIGHTNESS));
+#if USE_SIGMOID_BRIGHTNESS
+    brightness = sigmoidMap(brightness);
+#endif
 
     if (dp >= 0.0f) {
         return CRGB(0, brightness, 0);  // green — up
