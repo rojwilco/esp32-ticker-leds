@@ -9,8 +9,9 @@
 // ---------------------------------------------------------------------------
 // Hardware config
 // ---------------------------------------------------------------------------
-#define LED_PIN         23
-#define NUM_LEDS         6
+#define LED_PIN             23
+#define NUM_LEDS             6
+#define MARKET_OPEN_LED_PIN  5  // onboard "L" LED — HIGH when market is open
 
 // ---------------------------------------------------------------------------
 // Timing
@@ -23,6 +24,7 @@
 #define DIM_BRIGHTNESS          20
 #define FULL_BRIGHTNESS        255
 #define USE_SIGMOID_BRIGHTNESS   1  // 0 = linear, 1 = sigmoid
+#define CLOSED_BRIGHTNESS_SCALE  3  // divide LED brightness by this when market is closed
 
 // ---------------------------------------------------------------------------
 // Price-change scale: ±MAX_PERCENT maps to full brightness
@@ -36,9 +38,9 @@ const char* const SYMBOLS[NUM_LEDS] = {
     "SPY",   // LED 0: S&P 500 (ETF proxy — ^GSPC requires paid Finnhub tier)
     "QQQ",   // LED 1: NASDAQ-100 (ETF proxy)
     "DIA",   // LED 2: DJIA (ETF proxy)
-    "AAPL",  // LED 3: customize
-    "MSFT",  // LED 4: customize
-    "GOOGL", // LED 5: customize
+    "VCIT",  // LED 3: customize
+    "NVDA",  // LED 4: customize
+    "SO", // LED 5: customize
 };
 
 // ---------------------------------------------------------------------------
@@ -50,6 +52,7 @@ CRGB leds[NUM_LEDS];
 // Forward declarations
 // ---------------------------------------------------------------------------
 void pollAllTickers();
+bool fetchMarketStatus();
 bool fetchQuote(const char* symbol, float* outDp);
 CRGB computeColor(float dp);
 
@@ -60,6 +63,9 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("\n\nESP32 Stock Ticker LED Indicator — starting up");
+
+    pinMode(MARKET_OPEN_LED_PIN, OUTPUT);
+    digitalWrite(MARKET_OPEN_LED_PIN, LOW);
 
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
     FastLED.setBrightness(255);
@@ -122,18 +128,72 @@ void loop() {
 // ---------------------------------------------------------------------------
 void pollAllTickers() {
     Serial.println("--- Polling tickers ---");
+    bool marketOpen = fetchMarketStatus();
+    digitalWrite(MARKET_OPEN_LED_PIN, marketOpen ? HIGH : LOW);
+
     for (int i = 0; i < NUM_LEDS; i++) {
         float dp = 0.0f;
         if (fetchQuote(SYMBOLS[i], &dp)) {
-            leds[i] = computeColor(dp);
-            Serial.printf("  [%d] %s  dp=%.2f%%  rgb=(%d,%d,%d)\n", i, SYMBOLS[i], dp, leds[i].r, leds[i].g, leds[i].b);
+            CRGB color = computeColor(dp);
+            if (!marketOpen) {
+                color.r /= CLOSED_BRIGHTNESS_SCALE;
+                color.g /= CLOSED_BRIGHTNESS_SCALE;
+                color.b /= CLOSED_BRIGHTNESS_SCALE;
+            }
+            leds[i] = color;
+            Serial.printf("  [%d] %s  dp=%.2f%%  rgb=(%d,%d,%d)\n",
+                          i, SYMBOLS[i], dp, leds[i].r, leds[i].g, leds[i].b);
         } else {
             leds[i] = CRGB(10, 10, 10);  // dim white = fetch failure
-            Serial.printf("  [%d] %s  FETCH FAILED  rgb=(%d,%d,%d)\n", i, SYMBOLS[i], leds[i].r, leds[i].g, leds[i].b);
+            Serial.printf("  [%d] %s  FETCH FAILED  rgb=(%d,%d,%d)\n",
+                          i, SYMBOLS[i], leds[i].r, leds[i].g, leds[i].b);
         }
     }
     FastLED.show();  // single show after all LEDs set — no flicker
     Serial.println("--- Poll complete ---");
+}
+
+// ---------------------------------------------------------------------------
+// fetchMarketStatus — returns true if US market is open; defaults to true on error
+// ---------------------------------------------------------------------------
+bool fetchMarketStatus() {
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    HTTPClient http;
+    char url[128];
+    snprintf(url, sizeof(url),
+             "https://finnhub.io/api/v1/stock/market-status?exchange=US&token=%s",
+             FINNHUB_TOKEN);
+
+    if (!http.begin(client, url)) {
+        Serial.println("  market-status: http.begin failed, assuming open");
+        return true;
+    }
+
+    int httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("  market-status: HTTP %d, assuming open\n", httpCode);
+        http.end();
+        return true;
+    }
+
+    JsonDocument filter;
+    filter["isOpen"] = true;
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, http.getStream(),
+                                               DeserializationOption::Filter(filter));
+    http.end();
+
+    if (err || doc["isOpen"].isNull()) {
+        Serial.println("  market-status: parse error, assuming open");
+        return true;
+    }
+
+    bool isOpen = doc["isOpen"].as<bool>();
+    Serial.printf("  market-status: isOpen=%s\n", isOpen ? "true" : "false");
+    return isOpen;
 }
 
 // ---------------------------------------------------------------------------
