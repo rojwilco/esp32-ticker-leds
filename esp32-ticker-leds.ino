@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 #define LED_PIN             23
 #define NUM_LEDS             6
-#define MARKET_OPEN_LED_PIN  5  // onboard "L" LED — HIGH when market is open
+#define MARKET_OPEN_LED_PIN  2  // onboard "L" LED — HIGH when market is open
 
 // ---------------------------------------------------------------------------
 // Timing
@@ -24,12 +24,12 @@
 #define DIM_BRIGHTNESS          20
 #define FULL_BRIGHTNESS        255
 #define USE_SIGMOID_BRIGHTNESS   1  // 0 = linear, 1 = sigmoid
-#define CLOSED_BRIGHTNESS_SCALE  3  // divide LED brightness by this when market is closed
+#define CLOSED_MAX_BRIGHTNESS   20  // scale open-market brightness to this max when market is closed
 
 // ---------------------------------------------------------------------------
 // Price-change scale: ±MAX_PERCENT maps to full brightness
 // ---------------------------------------------------------------------------
-#define MAX_PERCENT 3.0f
+#define MAX_PERCENT 5.0f
 
 // ---------------------------------------------------------------------------
 // Ticker symbols (URL-encoded at compile time)
@@ -54,7 +54,7 @@ CRGB leds[NUM_LEDS];
 void pollAllTickers();
 bool fetchMarketStatus();
 bool fetchQuote(const char* symbol, float* outDp);
-CRGB computeColor(float dp);
+CRGB computeColor(float dp, bool marketOpen);
 
 // ---------------------------------------------------------------------------
 // setup
@@ -134,13 +134,7 @@ void pollAllTickers() {
     for (int i = 0; i < NUM_LEDS; i++) {
         float dp = 0.0f;
         if (fetchQuote(SYMBOLS[i], &dp)) {
-            CRGB color = computeColor(dp);
-            if (!marketOpen) {
-                color.r /= CLOSED_BRIGHTNESS_SCALE;
-                color.g /= CLOSED_BRIGHTNESS_SCALE;
-                color.b /= CLOSED_BRIGHTNESS_SCALE;
-            }
-            leds[i] = color;
+            leds[i] = computeColor(dp, marketOpen);
             Serial.printf("  [%d] %s  dp=%.2f%%  rgb=(%d,%d,%d)\n",
                           i, SYMBOLS[i], dp, leds[i].r, leds[i].g, leds[i].b);
         } else {
@@ -258,7 +252,7 @@ static uint8_t sigmoidMap(uint8_t v) {
 // ---------------------------------------------------------------------------
 // computeColor — brightness proportional to |dp|, green=up red=down
 // ---------------------------------------------------------------------------
-CRGB computeColor(float dp) {
+CRGB computeColor(float dp, bool marketOpen) {
     float absDP = fabsf(dp);
     if (absDP > MAX_PERCENT) absDP = MAX_PERCENT;
 
@@ -267,6 +261,13 @@ CRGB computeColor(float dp) {
 #if USE_SIGMOID_BRIGHTNESS
     brightness = sigmoidMap(brightness);
 #endif
+
+    if (!marketOpen) {
+        // Scale the open-market brightness proportionally into [1, CLOSED_MAX_BRIGHTNESS],
+        // preserving relative differences between small and large moves but keeping
+        // all LEDs dim. Floor of 1 ensures the LED is never fully off.
+        brightness = max((uint8_t)1, (uint8_t)(brightness * CLOSED_MAX_BRIGHTNESS / 255.0f));
+    }
 
     if (dp >= 0.0f) {
         return CRGB(0, brightness, 0);  // green — up
