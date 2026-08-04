@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 // Hardware config
 // ---------------------------------------------------------------------------
-#define LED_PIN             23
+#define LED_PIN             16
 #define NUM_LEDS             6
 #define MARKET_OPEN_LED_PIN  2  // onboard "L" LED — HIGH when market is open
 
