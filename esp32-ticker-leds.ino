@@ -167,7 +167,8 @@ bool fetchMarketStatus() {
 
     int httpCode = http.GET();
     if (httpCode != HTTP_CODE_OK) {
-        Serial.printf("  market-status: HTTP %d, assuming open\n", httpCode);
+        Serial.printf("  market-status: HTTP %d (RSSI=%d dBm), assuming open\n",
+                      httpCode, WiFi.RSSI());
         http.end();
         return true;
     }
@@ -210,7 +211,8 @@ bool fetchQuote(const char* symbol, float* outDp) {
 
     int httpCode = http.GET();
     if (httpCode != HTTP_CODE_OK) {
-        Serial.printf("    HTTP error %d for %s\n", httpCode, symbol);
+        Serial.printf("    HTTP error %d for %s (RSSI=%d dBm)\n",
+                      httpCode, symbol, WiFi.RSSI());
         http.end();
         return false;
     }
